@@ -35,4 +35,5 @@ oodrivetoolでキャリブレーション
 ```
 ros2 run od_ros od --ros-args --param config_file:=[config.jsonのpath]
 ```
-https://github.com/nokaaaaa/haru_gui　これを使うといい感じにスマホをコントローラできる
+https://github.com/nokaaaaa/haru_gui  
+これを使うといい感じにスマホをコントローラできる
