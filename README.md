@@ -35,5 +35,10 @@ oodrivetoolでキャリブレーション
 ```
 ros2 run od_ros od --ros-args --param config_file:=[config.jsonのpath]
 ```
+これを実行すると/motor0_speed に速度1を遅れる
+```
+ros2 topic pub /motor0_speed std_msgs/msg/Float32 "{data: 1.0}"
+```
 https://github.com/nokaaaaa/haru_gui  
 これを使うといい感じにスマホをコントローラできる
+
