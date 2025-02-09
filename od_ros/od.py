@@ -1,8 +1,7 @@
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist
+from std_msgs.msg import Float32
 import json
-import math
 import odrive
 from odrive.enums import *
 
@@ -15,7 +14,7 @@ class OmniMotorController(Node):
         with open(config_file, "r") as file:
             self.config = json.load(file)
 
-        # モーター設定をクラス内で保持
+        # モーター設定を保持
         self.motor_configs = self.config.get("motors", [])
         if not self.motor_configs:
             self.get_logger().error("設定ファイルに 'motors' が存在しません。処理を中断します。")
@@ -25,13 +24,21 @@ class OmniMotorController(Node):
         self.odrives = {}
         self.connect_odrives()
 
-        # /cmd_velトピックの購読
-        self.cmd_vel_subscriber = self.create_subscription(
-            Twist,
-            "/cmd_vel",
-            self.cmd_vel_callback,
-            10
-        )
+        # 各モーターのトピック購読
+        self.subscribers = []
+        for motor_config in self.motor_configs:
+            topic_name = motor_config["topic_name"]
+            serial_number = motor_config["serial_number"]
+            axis = motor_config["axis"]
+            
+            sub = self.create_subscription(
+                Float32,
+                topic_name,
+                lambda msg, sn=serial_number, ax=axis: self.set_motor_speed(sn, ax, msg.data),
+                10
+            )
+            self.subscribers.append(sub)
+            self.get_logger().info(f"{topic_name} を購読しています（シリアル: {serial_number}, 軸: {axis}）。")
 
     def connect_odrives(self):
         """
@@ -53,6 +60,10 @@ class OmniMotorController(Node):
         """
         指定されたモーターに速度を設定します。
         """
+        if serial_number not in self.odrives:
+            self.get_logger().error(f"シリアル {serial_number} のODriveが見つかりません。")
+            return
+
         odrv = self.odrives[serial_number]
         motor = odrv.axis0 if axis == 0 else odrv.axis1
 
@@ -60,26 +71,6 @@ class OmniMotorController(Node):
         motor.controller.input_vel = speed
 
         self.get_logger().info(f"シリアル {serial_number}, 軸 {axis} のモーター速度を {speed} に設定しました。")
-
-    def cmd_vel_callback(self, msg):
-        """
-        /cmd_velメッセージを受け取り、オムニホイールロボットのモーター速度を計算して設定します。
-        """
-        x = msg.linear.x
-        y = msg.linear.y
-
-        # 各ホイールの速度を計算
-        angles = [math.radians(45), math.radians(135), math.radians(225), math.radians(315)]
-        speeds = [
-            -math.sin(angle) * x + math.cos(angle) * y
-            for angle in angles
-        ]
-
-        # 各モーターに速度を適用
-        for i, motor_config in enumerate(self.motor_configs):
-            serial_number = motor_config["serial_number"]
-            axis = motor_config["axis"]
-            self.set_motor_speed(serial_number, axis, speeds[i])
 
 def main(args=None):
     rclpy.init(args=args)
