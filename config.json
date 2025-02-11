@@ -1,0 +1,9 @@
+{
+    "motors": [
+      {
+        "serial_number": "336B33573333",
+        "axis": 0,
+        "topic_name": "/motor0_speed"
+      }
+    ]
+  }
