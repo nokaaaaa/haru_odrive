@@ -1,0 +1,26 @@
+{
+  "R": 0.2,
+  "wheel_radius": 0.05,
+  "motors": [
+      {
+          "serial_number": "206A35A43548",
+          "axis": 0,
+          "topic_name": "/motor0_speed"
+      },
+      {
+          "serial_number": "206A35A43548",
+          "axis": 1,
+          "topic_name": "/motor1_speed"
+      },
+      {
+          "serial_number": "206A35A43549",
+          "axis": 0,
+          "topic_name": "/motor2_speed"
+      },
+      {
+          "serial_number": "206A35A43549",
+          "axis": 1,
+          "topic_name": "/motor3_speed"
+      }
+  ]
+}
