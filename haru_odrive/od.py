@@ -71,10 +71,10 @@ class OmniMotorController(Node):
         omega = msg.angular.z
 
         coeff = 1 / (2*math.pi*self.r)
-        v1 = coeff * (-sin(self.theta+math.pi/4)*cos(self.theta)*Vx + cos(self.theta+math.pi/4)*cos(self.theta)*Vy + self.R * omega)
-        v2 = coeff * (-sin(self.theta+3*math.pi/4)*cos(self.theta)*Vx + cos(self.theta+3*math.pi/4)*cos(self.theta)*Vy + self.R * omega)
-        v3 = coeff * (-sin(self.theta+5*math.pi/4)*cos(self.theta)*Vx + cos(self.theta+5*math.pi/4)*cos(self.theta)*Vy + self.R * omega)
-        v4 = coeff * (-sin(self.theta+7*math.pi/4)*cos(self.theta)*Vx + cos(self.theta+7*math.pi/4)*cos(self.theta)*Vy + self.R * omega)
+        v1 = coeff * (-sin(self.theta+math.pi/4)*Vx + cos(self.theta+math.pi/4)*Vy + self.R * omega)
+        v2 = coeff * (-sin(self.theta+3*math.pi/4)*Vx + cos(self.theta+3*math.pi/4)*Vy + self.R * omega)
+        v3 = coeff * (-sin(self.theta+5*math.pi/4)*Vx + cos(self.theta+5*math.pi/4)*Vy + self.R * omega)
+        v4 = coeff * (-sin(self.theta+7*math.pi/4)*Vx + cos(self.theta+7*math.pi/4)*Vy + self.R * omega)
 
         speeds = [v1, v2, v3, v4]
 
