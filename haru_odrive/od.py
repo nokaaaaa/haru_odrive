@@ -1,6 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Pose2D
 import json
 import odrive
 import math
@@ -30,12 +31,23 @@ class OmniMotorController(Node):
             10
         )
 
+        self.pose_subscription = self.create_subscription(
+            Pose2D,
+            '/pose',  # トピック名
+            self.pose_callback,  # コールバック関数
+            10  # キューサイズ
+        )
+
         self.listener = keyboard.Listener(on_press=self.on_key_press)
         self.listener.start()
         self.calibration_done = False
+        self.theta = 0
 
         self.R = self.config.get("R", 0.2)  # 中心からホイールまでの距離(m)
         self.r = self.config.get("wheel_radius", 0.05)  # ホイール半径(m)
+
+    def pose_callback(self, msg):
+        self.theta=msg.theta
 
     def connect_odrives(self):
         for motor_config in self.motor_configs:
@@ -59,11 +71,10 @@ class OmniMotorController(Node):
         omega = msg.angular.z
 
         coeff = 1 / (2*math.pi*self.r)
-        r2 = math.sqrt(2)
-        v1 = coeff * ((-Vx + Vy)/r2 + self.R * omega)
-        v2 = coeff * ((-Vx - Vy)/r2 + self.R * omega)
-        v3 = coeff * ((Vx - Vy)/r2 + self.R * omega)
-        v4 = coeff * ((Vx + Vy)/r2 + self.R * omega)
+        v1 = coeff * (-sin(self.theta+math.pi/4)*cos(self.theta)*Vx + cos(self.theta+math.pi/4)*cos(self.theta)*Vy + self.R * omega)
+        v2 = coeff * (-sin(self.theta+3*math.pi/4)*cos(self.theta)*Vx + cos(self.theta+3*math.pi/4)*cos(self.theta)*Vy + self.R * omega)
+        v3 = coeff * (-sin(self.theta+5*math.pi/4)*cos(self.theta)*Vx + cos(self.theta+5*math.pi/4)*cos(self.theta)*Vy + self.R * omega)
+        v4 = coeff * (-sin(self.theta+7*math.pi/4)*cos(self.theta)*Vx + cos(self.theta+7*math.pi/4)*cos(self.theta)*Vy + self.R * omega)
 
         speeds = [v1, v2, v3, v4]
 
