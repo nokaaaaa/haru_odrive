@@ -2,140 +2,160 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import Pose2D
-import json
+from std_msgs.msg import Bool, Float32
 import odrive
+import json
 import math
-from odrive.enums import *
-from pynput import keyboard  # キーボード入力を監視
+from sensor_msgs.msg import Joy
 
-class OmniMotorController(Node):
-    def __init__(self, config_file):
-        super().__init__('omni_motor_controller')
-
-        self.get_logger().info(f"設定ファイルを読み込んでいます: {config_file}")
-        with open(config_file, "r") as file:
+class ODriveController(Node):
+    def __init__(self):
+        super().__init__('odrive_controller')
+        self.declare_parameter("config_file", "config.json")
+        config_path = self.get_parameter("config_file").value
+        self.get_logger().info(f'Loading config from {config_path}')
+        
+        with open(config_path, 'r') as file:
             self.config = json.load(file)
-
-        self.motor_configs = self.config.get("motors", [])
-        if not self.motor_configs:
-            self.get_logger().error("設定ファイルに 'motors' が存在しません。処理を中断します。")
-            raise ValueError("設定ファイルが無効です。")
-
+        
+        self.R = self.config.get("R", 0.2)
+        self.wheel_radius = self.config.get("wheel_radius", 0.05)
+        
         self.odrives = {}
-        self.connect_odrives()
+        self.load_odrives()
+        
+        self.create_subscription(Twist, '/pid_cmd_vel', self.twist_callback, 10)
+        self.create_subscription(Pose2D,'/pose',self.pose_callback, 10)
+        self.create_subscription(Bool, '/calib', self.calib_callback, 10)
+        self.create_subscription(Bool, '/closed', self.closed_loop_callback, 10)
 
-        self.subscription = self.create_subscription(
-            Twist,
-            '/pid_cmd_vel',
-            self.cmd_vel_callback,
-            10
-        )
-
-        self.pose_subscription = self.create_subscription(
-            Pose2D,
-            '/pose',  # トピック名
-            self.pose_callback,  # コールバック関数
-            10  # キューサイズ
-        )
-
-        self.listener = keyboard.Listener(on_press=self.on_key_press)
-        self.listener.start()
-        self.calibration_done = False
         self.theta = 0
 
-        self.R = self.config.get("R", 0.2)  # 中心からホイールまでの距離(m)
-        self.r = self.config.get("wheel_radius", 0.05)  # ホイール半径(m)
+        self.encoder_publisher_l = self.create_publisher(Float32, '/motor_encoder_position_l', 10)
+        self.encoder_publisher_r = self.create_publisher(Float32, '/motor_encoder_position_r', 10)
 
-    def pose_callback(self, msg):
-        self.theta=msg.theta
+        # 定期的にエンコーダの位置をパブリッシュ
+        self.create_timer(0.0001, self.encoder_position_publish_callback)  # 0.0001秒毎にエンコーダ位置をパブリッシュ
+        self.create_subscription(Bool,'reset_pos',self.reset_encoder_position,10)
+        for motor in self.config["motors"]:
+            self.create_subscription(Float32, motor["topic_name"], self.create_motor_callback(motor), 10)
+    
+    
+    def reset_encoder_position(self , msg):
+       self.get_logger().info(f"Received reset command: {msg.data}")
+       if msg.data == True: 
+          for serial, odrv in self.odrives.items():
+            if odrv:
+                 odrv.axis1.encoder.set_linear_count(0)
+                 odrv.axis0.encoder.set_linear_count(0)
+                 self.get_logger().info(f"Reset encoder position for ODrive {serial}")
+            else:
+                 self.get_logger().error(f"ODrive {serial} not found!")
 
-    def connect_odrives(self):
-        for motor_config in self.motor_configs:
-            serial_number = motor_config["serial_number"]
+    def load_odrives(self):
+        for motor in self.config["motors"]:
+            serial = motor["serial_number"]
+            if serial not in self.odrives:
+                self.get_logger().info(f'Connecting to ODrive {serial}...')
+                self.odrives[serial] = odrive.find_any(serial_number=serial)
+                self.get_logger().info(f'Connected to ODrive {serial}')
 
-            if serial_number not in self.odrives:
-                self.get_logger().info(f"シリアル番号 {serial_number} のODriveに接続しています...")
-                try:
-                    self.odrives[serial_number] = odrive.find_any(serial_number=serial_number)
-                    self.get_logger().info(f"ODrive {serial_number} に接続しました。")
-                except Exception as e:
-                    self.get_logger().error(f"ODrive {serial_number} に接続できません: {e}")
-                    raise
+    def encoder_position_publish_callback(self):
+        # config.jsonの5番目と6番目のモーターのみを処理
+        motors_to_check = [4,5]  # インデックスは0から始まるので、5番目と6番目はインデックス4と5
+        for index in motors_to_check:
+            if index < len(self.config["motors"]):
+                motor = self.config["motors"][index]
+                serial = motor["serial_number"]
+                odrv = self.odrives.get(serial)
+                if odrv:
+                    # アクシス0とアクシス1のエンコーダ位置を取得
+                    axis0_position = odrv.axis0.encoder.pos_estimate
+                    axis1_position = odrv.axis1.encoder.pos_estimate
+                    
+                    # それぞれのエンコーダ位置をパブリッシュ
+                    self.encoder_publisher_r.publish(Float32(data=axis0_position))
+                    self.encoder_publisher_l.publish(Float32(data=axis1_position))
+                    self.get_logger().info(f"Published encoder position for motor {serial}:  axis0={axis0_position}, axis1={axis1_position}")
+                else:
+                    self.get_logger().error(f'ODrive {serial} not found!')  
 
-    def cmd_vel_callback(self, msg):
-        """
-        /pid_cmd_vel (Twist) メッセージを受け取ってモーター速度を計算し適用
-        """
+    def pose_callback(self,msg):
+        self.yaw = msg.theta          
+    
+    def twist_callback(self, msg):
         Vx = msg.linear.x
         Vy = msg.linear.y
         omega = msg.angular.z
-
-        coeff = 1 / (2*math.pi*self.r)
-        v1 = coeff * (-sin(self.theta+math.pi/4)*Vx + cos(self.theta+math.pi/4)*Vy + self.R * omega)
-        v2 = coeff * (-sin(self.theta+3*math.pi/4)*Vx + cos(self.theta+3*math.pi/4)*Vy + self.R * omega)
-        v3 = coeff * (-sin(self.theta+5*math.pi/4)*Vx + cos(self.theta+5*math.pi/4)*Vy + self.R * omega)
-        v4 = coeff * (-sin(self.theta+7*math.pi/4)*Vx + cos(self.theta+7*math.pi/4)*Vy + self.R * omega)
-
-        speeds = [v1, v2, v3, v4]
-
-        for i, motor_config in enumerate(self.motor_configs):
-            serial_number = motor_config["serial_number"]
-            axis = motor_config["axis"]
-            self.set_motor_speed(serial_number, axis, speeds[i])
-
-    def set_motor_speed(self, serial_number, axis, speed):
-        if serial_number not in self.odrives:
-            self.get_logger().error(f"シリアル {serial_number} のODriveが見つかりません。")
+        
+        coeff = 1 / (2 * math.pi * self.wheel_radius)
+        
+        v1 =coeff*( -math.sin(self.yaw + math.pi / 4) * Vx + math.cos(self.yaw + math.pi / 4) * Vy + self.R * omega)
+        v2 = coeff*(-math.sin(self.yaw + math.pi * 3 / 4) * Vx + math.cos(self.yaw + math.pi * 3 / 4) * Vy + self.R * omega)
+        v3 = coeff*(-math.sin(self.yaw + math.pi * 5 / 4) * Vx + math.cos(self.yaw + math.pi * 5 / 4) * Vy + self.R * omega)
+        v4 =coeff*( -math.sin(self.yaw + math.pi * 7 / 4) * Vx + math.cos(self.yaw + math.pi * 7 / 4) * Vy + self.R * omega)
+        
+        wheel_speeds = [v1, v2, v3, v4]
+        
+        if len(self.config["motors"]) < 4:
+            self.get_logger().error('Not enough motors configured for twist command')
             return
+        
+        for i, motor in enumerate(self.config["motors"][:4]):
+            odrv = self.odrives.get(motor["serial_number"])
+            if odrv:
+                axis = odrv.axis0 if motor["axis"] == 0 else odrv.axis1
+                if axis.controller.config.control_mode != 2:
+                    self.get_logger().warn(f'Switching {motor["serial_number"]} axis {motor["axis"]} to velocity control mode')
+                    axis.controller.config.control_mode = 2  
+                axis.controller.input_vel = wheel_speeds[i]
+            else:
+                self.get_logger().error(f'ODrive {motor["serial_number"]} not found!')
+    
+    def create_motor_callback(self, motor):
+        def motor_callback(msg):
+            odrv = self.odrives.get(motor["serial_number"])
+            if odrv:
+                axis = odrv.axis0 if motor["axis"] == 0 else odrv.axis1
+                axis.controller.input_vel = msg.data
+            else:
+                self.get_logger().error(f'ODrive {motor["serial_number"]} not found!')
+        return motor_callback
 
-        odrv = self.odrives[serial_number]
-        motor = odrv.axis0 if axis == 0 else odrv.axis1
+    # def listener_callback(self,msg):
+    #     if msg.buttons[10] == 1:
+    #         for odrv in self.odrives.values():
+    #             odrv.config.dc_max_negative_current = -20
+                # odrv.axis0.motor.config.torque_constant = 8.27/270
+                # odrv.axis1.motor.config.torque_constant = 8.27/270
+                # odrv.axis0.controller.config.vel_limit = 108
+                # odrv.axis1.controller.config.vel_limit = 108
+                # odrv.axis0.motor.config.resistance_calib_max_voltage = 10
+                # odrv.axis1.motor.config.resistance_calib_max_voltage = 10
 
-        motor.controller.config.control_mode = CONTROL_MODE_VELOCITY_CONTROL
-        motor.controller.input_vel = speed
-
-        self.get_logger().info(f"シリアル {serial_number}, 軸 {axis} のモーター速度を {speed} に設定しました。")
-
-    def on_key_press(self, key):
-        try:
-            if key == keyboard.Key.space:
-                if not self.calibration_done:
-                    self.calibrate_motors()
-                    self.calibration_done = True
-                else:
-                    self.enable_closed_loop_control()
-        except Exception as e:
-            self.get_logger().error(f"キー入力処理中にエラーが発生しました: {e}")
-
-    def calibrate_motors(self):
-        self.get_logger().info("すべてのモーターをキャリブレーションしています...")
-        for serial_number, odrv in self.odrives.items():
-            for axis in [odrv.axis0, odrv.axis1]:
-                self.get_logger().info(f"シリアル {serial_number} のモーターをキャリブレーション中...")
-                axis.requested_state = AXIS_STATE_FULL_CALIBRATION_SEQUENCE
-
-    def enable_closed_loop_control(self):
-        self.get_logger().info("すべてのモーターをクローズドループ制御に設定しています...")
-        for serial_number, odrv in self.odrives.items():
-            for axis in [odrv.axis0, odrv.axis1]:
-                self.get_logger().info(f"シリアル {serial_number} のモーターをクローズドループ制御に設定中...")
-                axis.requested_state = AXIS_STATE_CLOSED_LOOP_CONTROL
+         
+    def calib_callback(self, msg):
+        if msg.data:
+            self.get_logger().info('Calibrating all motors...')
+            for odrv in self.odrives.values():
+                odrv.axis0.requested_state = 3  # AXIS_STATE_FULL_CALIBRATION_SEQUENCE
+                odrv.axis1.requested_state = 3
+    
+    def closed_loop_callback(self, msg):
+        if msg.data:
+            self.get_logger().info('Starting closed-loop control...')
+            for odrv in self.odrives.values():
+                odrv.axis0.controller.config.control_mode = 2
+                odrv.axis1.controller.config.control_mode = 2
+                odrv.axis0.requested_state = 8  # AXIS_STATE_CLOSED_LOOP_CONTROL
+                odrv.axis1.requested_state = 8
 
 def main(args=None):
     rclpy.init(args=args)
-    node = Node('argument_parser')
-    config_file = node.declare_parameter('config_file', '').value
-    if not config_file:
-        node.get_logger().error("パラメータ 'config_file' が指定されていません！ '--ros-args --param config_file:=<path_to_config>' を使用してください。")
-        return
-
-    try:
-        motor_controller = OmniMotorController(config_file)
-        rclpy.spin(motor_controller)
-    except Exception as e:
-        node.get_logger().error(f"ノードの起動中にエラーが発生しました: {e}")
-    finally:
-        rclpy.shutdown()
+    node = ODriveController()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
